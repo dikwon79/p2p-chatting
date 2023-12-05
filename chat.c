@@ -71,6 +71,7 @@ void p2preceivemsg(int server_fd);
 void p2psend(char *name,  int PORT);
 
 
+
 int main(int argc, char *argv[]) {
     char *ip_address;
     char *port_str;
@@ -505,9 +506,9 @@ static void *receive_messages(void *arg)
 
         char *finduser = strstr(message, "User");
         if (finduser != NULL) {
-            printf("\nInput message (Q to quit): ");
+            printf("\nInput message (Ctrl+D to quit): ");
         }else {
-            printf("\t\t\t\t\t\t\t %s \nInput message (Q to quit): ", message);
+            printf("\t\t\t\t\t\t\t %s \nInput message (Ctrl+D to quit): ", message);
         }
         fflush(stdout);
 
@@ -573,7 +574,7 @@ void *handle_client(void *arg) {
         // Clear the entire line
         printf("\033[K");
         printf("current talk:%d", clnt_sock);
-        printf("\t\t\t\t\t\t\t %s \nInput message (Q to quit): ", buf);
+        printf("\t\t\t\t\t\t\t %s \nInput message (Ctrl+D to quit): : ", buf);
         fflush(stdout);
         pthread_mutex_unlock(mutex);
     }
@@ -607,7 +608,7 @@ void *server_input_handler(void *arg) {
 
     while (1) {
         // Get server input
-        printf("\rInput message (Q to quit): ");
+        printf("\rInput message (Ctrl+D to quit): ");
         fflush(stdout);
         if (fgets(input_message, BUF_SIZE, stdin) == NULL) {
             perror("fgets");
@@ -814,11 +815,14 @@ void send_socket_info_all(struct ClientInfo *clients, int *clnt_socks, pthread_m
 //---client
 void run_client(int sockfd, char *user_name, const char *file_name, int client_PORT, int server_fd){
     pthread_t thread;
+    pthread_t keyPress;
     char message[BUF_SIZE];
     char connection_message[ADD_SIZE + 2];
 
     struct PortData portData;  // Assuming you have an instance of PortData
     struct ClientThreadArgs clientThreadArgs = {sockfd, &portData};
+
+
 
     if (file_name != NULL) {
         // Set a default username for the file reading version
@@ -853,15 +857,35 @@ void run_client(int sockfd, char *user_name, const char *file_name, int client_P
         }
 
 
+
         while (1) {
             size_t full_message_size;
             char *full_message;
             char leave_message[ADD_SIZE + 2];
 
-            fputs("Input message (Q to quit): ", stdout);
-            fgets(message, BUF_SIZE, stdin);
 
 
+            // Read input from the user
+            fputs("Input message (Ctrl+D to quit): ", stdout);
+
+            if (fgets(message, BUF_SIZE, stdin) == NULL) {
+                // Ctrl+D detected
+                printf("\nCtrl+D detected. Exiting...\n");
+                snprintf(leave_message, sizeof(leave_message), "%s[%d] has left the chat.\n", user_name, client_PORT);
+                printf("Client information:\n");
+                for (int i = 0; i < MAX_CLIENTS; ++i) {
+                    printf("Client %d: %s\n", i + 1, portData.message[i]);
+                }
+                write(sockfd, leave_message, strlen(leave_message));
+                close(sockfd);
+                exit(0);
+
+                // Additional cleanup and exit logic goes here
+                break;
+            }
+
+
+            //---------------------------------------------------------------------------
             if (!strcmp(message, "q\n") || !strcmp(message, "Q\n")) {
 
                 snprintf(leave_message, sizeof(leave_message), "%s[%d] has left the chat.\n", user_name, client_PORT);
@@ -938,6 +962,7 @@ void run_client(int sockfd, char *user_name, const char *file_name, int client_P
     }
 
     pthread_join(thread, NULL);
+
 }
 //Sending messages to port
 void p2psend(char *name,  int PORT)
@@ -980,7 +1005,7 @@ void p2psend(char *name,  int PORT)
 
     // Clear the entire line
     printf("\033[K");
-    printf("Input message (Q to quit): ");
+    printf("Input message (Ctrl+D to quit): ");
     fgets(message, BUF_SIZE, stdin);
 
 // Calculate the actual length of the port number when converting it to a string
@@ -1068,7 +1093,7 @@ void p2preceivemsg(int server_fd)
 
                     // Clear the entire line
                     printf("\033[K");
-                    printf("\t\t\t\t\t\t\t %s\nInput message (Q to quit):\"", buffer);
+                    printf("\t\t\t\t\t\t\t %s\nInput message (Ctrl+D to quit): :\"", buffer);
                     FD_CLR(i, &current_sockets);
                 }
             }
