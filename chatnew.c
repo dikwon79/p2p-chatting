@@ -475,25 +475,57 @@ static void *receive_messages(void *arg)
         message[str_len] = 0;
 
 
-        char *portPtr = strstr(message, "[User");
-        if (portPtr != NULL) {
+        char *startPtr = strstr(message, "[user");
+//        if (portPtr != NULL) {
+//
+//            char *token = strtok(portPtr, "\n");
+//            int index = 0;
+//
+//
+//            while (token != NULL && index < MAX_CLIENTS) {
+//
+//
+//                // Use strcpy to copy the string into the array
+//                strcpy(data->message[index], token);
+//
+//                token = strtok(NULL, "\n");
+//                index++;
+//            }
+//        }
 
-            char *token = strtok(portPtr, "\n");
-            int index = 0;
+        if (startPtr != NULL) {
+            // Find the starting position of the desired substring
+            startPtr = strchr(startPtr, ' ');  // Move to the space after "[userX]"
 
+            if (startPtr != NULL) {
+                // Find the ending position of the desired substring
+                char *endPtr = strchr(startPtr, ']');
 
-            while (token != NULL && index < MAX_CLIENTS) {
+                if (endPtr != NULL) {
+                    // Calculate the length of the desired substring
+                    size_t length = endPtr - startPtr + 2;
 
+                    // Allocate memory for the substring
+                    char substring[length];
 
-                // Use strcpy to copy the string into the array
-                strcpy(data->message[index], token);
+                    // Copy the substring into the allocated memory
+                    strncpy(substring, startPtr, length - 1);
 
-                token = strtok(NULL, "\n");
-                index++;
+                    // Null-terminate the substring
+                    substring[length - 1] = '\0';
+
+                    // Print or use the extracted substring as needed
+                    //printf("Extracted substring: %s\n", substring);
+
+                    for(int i; i < MAX_CLIENTS; i++){
+                        if (strcmp(data->message[i], "") == 0) {
+                            strcpy(data->message[i], substring);
+                            break;
+                        }
+                    }
+                }
             }
         }
-
-
 
         printf("\r");
 
@@ -503,7 +535,7 @@ static void *receive_messages(void *arg)
 //            printf("client %d: %s\n", i+1, data->message[i]);
 //        }
 
-        char *finduser = strstr(message, "User");
+        char *finduser = strstr(message, "user");
         if (finduser != NULL) {
             printf("\nInput message (Q to quit): ");
         }else {
@@ -550,13 +582,14 @@ void *handle_client(void *arg) {
 
         }
 
+
         // Append the value of clnt_sock to buf
         snprintf(input_message, sizeof(input_message), "[user%d] %s", clnt_sock, buf);
 
         // Write the received message to all connected clients
         pthread_mutex_lock(mutex);
         for (int i = 0; i < MAX_CLIENTS; ++i) {
-            if (clnt_socks[i] != 0 && clnt_socks[i] != clnt_sock) {
+            if (clnt_socks[i] != 0) {
                 // Ensure null-termination
                 input_message[str_len + sizeof("current talk:")] = '\0';
 
@@ -727,16 +760,16 @@ void run_server(int sockfd, char *user_name) {
 
 
 
-        // 클라이언트 정보 구조체에 저장
-
-        snprintf(clients[userIndex].username, sizeof(clients[userIndex].username), "User%d", *clnt_sock_ptr);
-        inet_ntop(clnt_addr.ss_family, (clnt_addr.ss_family == AF_INET) ? (void *)&(((struct sockaddr_in *)&clnt_addr)->sin_addr) : (void *)&(((struct sockaddr_in6 *)&clnt_addr)->sin6_addr), clients[userIndex].ip_address, sizeof(clients[userIndex].ip_address));
-        clients[userIndex].port = ntohs((clnt_addr.ss_family == AF_INET) ? ((struct sockaddr_in *)&clnt_addr)->sin_port : ((struct sockaddr_in6 *)&clnt_addr)->sin6_port);
-
-
-
-        // 클라이언트에게 정보 전송
-        send_socket_info_all(clients, clnt_socks, &mutex, userIndex);
+//        // 클라이언트 정보 구조체에 저장
+//
+//        snprintf(clients[userIndex].username, sizeof(clients[userIndex].username), "User%d", *clnt_sock_ptr);
+//        inet_ntop(clnt_addr.ss_family, (clnt_addr.ss_family == AF_INET) ? (void *)&(((struct sockaddr_in *)&clnt_addr)->sin_addr) : (void *)&(((struct sockaddr_in6 *)&clnt_addr)->sin6_addr), clients[userIndex].ip_address, sizeof(clients[userIndex].ip_address));
+//        clients[userIndex].port = ntohs((clnt_addr.ss_family == AF_INET) ? ((struct sockaddr_in *)&clnt_addr)->sin_port : ((struct sockaddr_in6 *)&clnt_addr)->sin6_port);
+//
+//
+//
+//        // 클라이언트에게 정보 전송
+//        send_socket_info_all(clients, clnt_socks, &mutex, userIndex);
 
 
 
@@ -985,7 +1018,7 @@ void p2psend(char *name,  int PORT)
 
 // Calculate the actual length of the port number when converting it to a string
     int port_length = snprintf(NULL, 0, "%d", PORT);
-    full_message_size = strlen(name) + strlen("[PORT:") + port_length + strlen("] says: ") + strlen(message) + 1;
+    full_message_size = strlen(name) + strlen("[PORT:") + port_length + strlen("]: ") + strlen(message) + 1;
 
     full_message = (char *)malloc(full_message_size);
 
@@ -995,7 +1028,7 @@ void p2psend(char *name,  int PORT)
     }
 
     // Use sprintf instead of snprintf to directly write into the allocated buffer
-    sprintf(full_message, "%s[PORT:%d] says: %s", name, PORT, message);
+    sprintf(full_message, "%s[PORT:%d]: %s", name, PORT, message);
 
 
     // Use strlen(full_message) to get the actual length of the string
