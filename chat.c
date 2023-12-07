@@ -1,91 +1,94 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <inttypes.h>
+#include <netinet/in.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdnoreturn.h>
 #include <string.h>
-#include <sys/types.h>
 #include <sys/socket.h>
-#include <netinet/in.h>
-#include <unistd.h>
+#include <sys/types.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
-
-#define BUF_SIZE 1024
+#define BUF_SIZE 2048
+#define BUFF_SIZE 4096
 #define ADD_SIZE 60
 #define MAX_CLIENTS 10
 #define UNKNOWN_OPTION_MESSAGE_LEN 24
 #define BASE_TEN 10
-#define PORT_INFO 100
+#define SCANF_ARRAY 20
+
+#define SOCKET_STR_SIZE 1024
+#define PORT_STR_SIZE 100
+#define LISTEN_BACKLOG 5
 
 struct ThreadArgs
 {
-    int *clnt_sock_ptr;
+    int             *clnt_sock_ptr;
     pthread_mutex_t *mutex;
-    int *clnt_socks;
+    int             *clnt_socks;
 };
 
-struct ClientInfo {
-    char username[BUF_SIZE];
-    char ip_address[INET6_ADDRSTRLEN];
+struct ClientInfo
+{
+    char      username[BUF_SIZE];
+    char      ip_address[INET6_ADDRSTRLEN];
     in_port_t port;
 };
 
-
-struct PortData {
-    int client[10];
+struct PortData
+{
+    int  client[MAX_CLIENTS];
     char message[MAX_CLIENTS][BUF_SIZE];
 };
 
-struct ClientThreadArgs {
-    int sockfd;
+struct ClientThreadArgs
+{
+    int              sockfd;
     struct PortData *data;
 };
 
-
-static void parse_arguments(int argc, char *argv[], char **address, char **port);
-static void handle_arguments(const char *binary_name, const char *address, const char *port_str, in_port_t *port);
-static in_port_t parse_in_port_t(const char *binary_name, const char *port_str);
-static void convert_address(const char *address, struct sockaddr_storage *addr);
-static int socket_create(int domain, int type, int protocol);
-static void socket_connect(int sockfd, struct sockaddr_storage *addr, in_port_t port);
-static void socket_bind(int sockfd, struct sockaddr_storage *addr, in_port_t port);
-static void start_listening(int server_fd, int backlog);
+static void           parse_arguments(int argc, char *argv[], char **address, char **port);
+static void           handle_arguments(const char *binary_name, const char *address, const char *port_str, in_port_t *port);
+static in_port_t      parse_in_port_t(const char *binary_name, const char *port_str);
+static void           convert_address(const char *address, struct sockaddr_storage *addr);
+static int            socket_create(int domain, int type, int protocol);
+static void           socket_connect(int sockfd, struct sockaddr_storage *addr, in_port_t port);
+static void           socket_bind(int sockfd, struct sockaddr_storage *addr, in_port_t port);
+static void           start_listening(int server_fd, int backlog);
 _Noreturn static void usage(const char *program_name, int exit_code, const char *message);
-void read_childproc(int sig);
-void *handle_client(void *arg);
-static void setup_signal_handler(void);
+void                  read_childproc(int sig);
+void                 *handle_client(void *arg);
+static void           setup_signal_handler(void);
 static void          *receive_messages(void *arg);
 // P2P 채팅 서버의 메인 루프
-void run_server(int sockfd,  char *user_name);
-void send_socket_info_all(struct ClientInfo *clients, int *clnt_socks, pthread_mutex_t *mutex,int current_client_index);
+void run_server(int sockfd);
+void send_socket_info_all(struct ClientInfo *clients, int *clnt_socks, pthread_mutex_t *mutex);
 
 // P2P
-void run_client(int sockfd, char *user_name, const char *file_name, int client_PORT, int cltser_soc);
+void  run_client(int sockfd, char *user_name, const char *file_name, int client_PORT, int server_fd);
 void *server_input_handler(void *arg);
 void *p2preceive_thread(void *server_fd);
-void p2preceivemsg(int server_fd);
-void p2psend(char *name,  int PORT);
+void  p2preceivemsg(int server_fd);
+void  p2psend(char *name, int PORT, long int PORT_server, struct PortData portData);
 
-
-
-int main(int argc, char *argv[]) {
-    char *ip_address;
-    char *port_str;
-    in_port_t port;
+int main(int argc, char *argv[])
+{
+    char                   *ip_address;
+    char                   *port_str;
+    in_port_t               port;
     struct sockaddr_storage addr;
-    int sockfd;
-    char user_name[BUF_SIZE];
+    int                     sockfd;
+    char                    user_name[BUF_SIZE];
 
-    struct PortData portinfo;
-    const char *file_name = (argc == 5) ? argv[4] : NULL;
+    const char *file_name = (argc == LISTEN_BACKLOG) ? argv[4] : NULL;
 
-    pthread_t thread;
     ip_address = NULL;
-    port_str = NULL;
+    port_str   = NULL;
 
     parse_arguments(argc, argv, &ip_address, &port_str);
     handle_arguments(argv[0], ip_address, port_str, &port);
@@ -93,68 +96,62 @@ int main(int argc, char *argv[]) {
 
     sockfd = socket_create(addr.ss_family, SOCK_STREAM, 0);
 
-
-
-
-    if (strcmp(argv[1], "-a") == 0) {
+    if(strcmp(argv[1], "-a") == 0)
+    {
         // 서버 모드
         socket_bind(sockfd, &addr, port);
         start_listening(sockfd, MAX_CLIENTS);
         puts("A chat room has been opened..");
 
-        run_server(sockfd, user_name);
-    } else if (strcmp(argv[1], "-c") == 0) {
-
-
+        run_server(sockfd);
+    }
+    else if(strcmp(argv[1], "-c") == 0)
+    {
         //---------------------------p2p server ---------------------------------------------
-
 
         int client_PORT;
 
-        int server_fd;
+        int                server_fd;
         struct sockaddr_in address;
+        socklen_t          len;
 
         // Creating socket file descriptor
-        if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+        if((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
+        {
             perror("socket failed");
             exit(EXIT_FAILURE);
         }
         // Forcefully attaching socket to the port
 
-        address.sin_family = AF_INET;
+        address.sin_family      = AF_INET;
         address.sin_addr.s_addr = INADDR_ANY;
-        address.sin_port = htons(0);
+        address.sin_port        = htons(0);
 
-
-        if (bind(server_fd, (struct sockaddr *) &address, sizeof(address)) < 0) {
+        if(bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0)
+        {
             perror("bind failed");
             exit(EXIT_FAILURE);
         }
 
-        // Retrieve the assigned port
-        socklen_t len = sizeof(address);
-        if (getsockname(server_fd, (struct sockaddr *) &address, &len) == -1) {
+#pragma GCC diagnostic ignored "-Wdeclaration-after-statement"
+
+        len = sizeof(address);
+
+        if(getsockname(server_fd, (struct sockaddr *)&address, &len) == -1)
+        {
             perror("getsockname failed");
             exit(EXIT_FAILURE);
         }
 
-
         client_PORT = ntohs(address.sin_port);
-
-
 
         printf("Enter your name: ");
         fflush(stdout);
         fgets(user_name, sizeof(user_name), stdin);
 
-
         user_name[strcspn(user_name, "\n")] = 0;
         socket_connect(sockfd, &addr, port);
         run_client(sockfd, user_name, file_name, client_PORT, server_fd);
-
-
-
-
     }
 
     // 소켓 닫기
@@ -168,17 +165,18 @@ static void parse_arguments(int argc, char *argv[], char **ip_address, char **po
 
     opterr = 0;
 
-    while ((opt = getopt(argc, argv, "ach")) != -1)
+    while((opt = getopt(argc, argv, "ach")) != -1)
     {
-
-        switch (opt)
+        switch(opt)
         {
             case 'a':
             {
+                printf("server mode");
                 break;
             }
             case 'c':
             {
+                printf("client mode");
                 break;
             }
             case 'h':
@@ -197,31 +195,30 @@ static void parse_arguments(int argc, char *argv[], char **ip_address, char **po
                 usage(argv[0], EXIT_FAILURE, NULL);
             }
         }
-
     }
 
-    if (optind >= argc)
+    if(optind >= argc)
     {
         usage(argv[0], EXIT_FAILURE, "The IP address or hostname is required.");
     }
 
-    if (optind < argc - 3)
+    if(optind < argc - 3)
     {
         usage(argv[0], EXIT_FAILURE, "Too many arguments.");
     }
 
     *ip_address = argv[optind];
-    *port = argv[optind + 1];
+    *port       = argv[optind + 1];
 }
 
 static void handle_arguments(const char *binary_name, const char *ip_address, const char *port_str, in_port_t *port)
 {
-    if (ip_address == NULL)
+    if(ip_address == NULL)
     {
         usage(binary_name, EXIT_FAILURE, "The IP address is required.");
     }
 
-    if (port_str == NULL)
+    if(port_str == NULL)
     {
         usage(binary_name, EXIT_FAILURE, "Port argument is missing.");
     }
@@ -231,24 +228,24 @@ static void handle_arguments(const char *binary_name, const char *ip_address, co
 
 in_port_t parse_in_port_t(const char *binary_name, const char *str)
 {
-    char *endptr;
+    char     *endptr;
     uintmax_t parsed_value;
 
-    errno = 0;
+    errno        = 0;
     parsed_value = strtoumax(str, &endptr, BASE_TEN);
 
-    if (errno != 0)
+    if(errno != 0)
     {
         perror("Error parsing in_port_t");
         exit(EXIT_FAILURE);
     }
 
-    if (*endptr != '\0')
+    if(*endptr != '\0')
     {
         usage(binary_name, EXIT_FAILURE, "Invalid characters in input.");
     }
 
-    if (parsed_value > UINT16_MAX)
+    if(parsed_value > UINT16_MAX)
     {
         usage(binary_name, EXIT_FAILURE, "in_port_t value out of range.");
     }
@@ -260,11 +257,11 @@ static void convert_address(const char *address, struct sockaddr_storage *addr)
 {
     memset(addr, 0, sizeof(*addr));
 
-    if (inet_pton(AF_INET, address, &(((struct sockaddr_in *)addr)->sin_addr)) == 1)
+    if(inet_pton(AF_INET, address, &(((struct sockaddr_in *)addr)->sin_addr)) == 1)
     {
         addr->ss_family = AF_INET;
     }
-    else if (inet_pton(AF_INET6, address, &(((struct sockaddr_in6 *)addr)->sin6_addr)) == 1)
+    else if(inet_pton(AF_INET6, address, &(((struct sockaddr_in6 *)addr)->sin6_addr)) == 1)
     {
         addr->ss_family = AF_INET6;
     }
@@ -281,7 +278,7 @@ static int socket_create(int domain, int type, int protocol)
 
     sockfd = socket(domain, type, protocol);
 
-    if (sockfd == -1)
+    if(sockfd == -1)
     {
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
@@ -292,11 +289,11 @@ static int socket_create(int domain, int type, int protocol)
 
 static void socket_connect(int sockfd, struct sockaddr_storage *addr, in_port_t port)
 {
-    char addr_str[INET6_ADDRSTRLEN];
+    char      addr_str[INET6_ADDRSTRLEN];
     in_port_t net_port;
     socklen_t addr_len;
 
-    if (inet_ntop(addr->ss_family, addr->ss_family == AF_INET ? (void *)&(((struct sockaddr_in *)addr)->sin_addr) : (void *)&(((struct sockaddr_in6 *)addr)->sin6_addr), addr_str, sizeof(addr_str)) == NULL)
+    if(inet_ntop(addr->ss_family, addr->ss_family == AF_INET ? (void *)&(((struct sockaddr_in *)addr)->sin_addr) : (void *)&(((struct sockaddr_in6 *)addr)->sin6_addr), addr_str, sizeof(addr_str)) == NULL)
     {
         perror("inet_ntop");
         exit(EXIT_FAILURE);
@@ -305,21 +302,21 @@ static void socket_connect(int sockfd, struct sockaddr_storage *addr, in_port_t 
     printf("Connecting to: %s:%u\n", addr_str, port);
     net_port = htons(port);
 
-    if (addr->ss_family == AF_INET)
+    if(addr->ss_family == AF_INET)
     {
         struct sockaddr_in *ipv4_addr;
 
-        ipv4_addr = (struct sockaddr_in *)addr;
+        ipv4_addr           = (struct sockaddr_in *)addr;
         ipv4_addr->sin_port = net_port;
-        addr_len = sizeof(struct sockaddr_in);
+        addr_len            = sizeof(struct sockaddr_in);
     }
-    else if (addr->ss_family == AF_INET6)
+    else if(addr->ss_family == AF_INET6)
     {
         struct sockaddr_in6 *ipv6_addr;
 
-        ipv6_addr = (struct sockaddr_in6 *)addr;
+        ipv6_addr            = (struct sockaddr_in6 *)addr;
         ipv6_addr->sin6_port = net_port;
-        addr_len = sizeof(struct sockaddr_in6);
+        addr_len             = sizeof(struct sockaddr_in6);
     }
     else
     {
@@ -327,7 +324,7 @@ static void socket_connect(int sockfd, struct sockaddr_storage *addr, in_port_t 
         exit(EXIT_FAILURE);
     }
 
-    if (connect(sockfd, (struct sockaddr *)addr, addr_len) == -1)
+    if(connect(sockfd, (struct sockaddr *)addr, addr_len) == -1)
     {
         char *msg;
         msg = strerror(errno);
@@ -337,7 +334,6 @@ static void socket_connect(int sockfd, struct sockaddr_storage *addr, in_port_t 
 
     printf("Connected to: %s:%u\n", addr_str, port);
 }
-
 
 static void socket_bind(int sockfd, struct sockaddr_storage *addr, in_port_t port)
 {
@@ -428,7 +424,6 @@ void read_childproc(int sig)
     }
 }
 
-
 static void setup_signal_handler(void)
 {
     struct sigaction sa;
@@ -441,7 +436,7 @@ static void setup_signal_handler(void)
 #endif
     sa.sa_handler = read_childproc;
 #if defined(__clang__)
-#pragma clang diagnostic pop
+    #pragma clang diagnostic pop
 #endif
 
     sigemptyset(&sa.sa_mask);
@@ -456,12 +451,12 @@ static void setup_signal_handler(void)
 
 static void *receive_messages(void *arg)
 {
-    struct ClientThreadArgs *args = (struct ClientThreadArgs *)arg;
-    int sockfd = args->sockfd;  // Access sockfd from the structure
-    struct PortData *data = args->data;
-
-    char message[BUF_SIZE];
-
+    struct ClientThreadArgs *args   = (struct ClientThreadArgs *)arg;
+    int                      sockfd = args->sockfd;    // Access sockfd from the structure
+    struct PortData         *data   = args->data;
+    char                    *token;
+    char                    *saveptr;
+    char                     message[BUF_SIZE];
 
     while(1)
     {
@@ -475,80 +470,82 @@ static void *receive_messages(void *arg)
 
         message[str_len] = 0;
 
-
         char *portPtr = strstr(message, "[User");
-        if (portPtr != NULL) {
+        if(portPtr != NULL)
+        {
+            token = strtok_r(portPtr, "\n", &saveptr);
 
-            char *token = strtok(portPtr, "\n");
             int index = 0;
 
-
-            while (token != NULL && index < MAX_CLIENTS) {
-
-
+            while(token != NULL && index < MAX_CLIENTS)
+            {
                 // Use strcpy to copy the string into the array
                 strcpy(data->message[index], token);
 
-                token = strtok(NULL, "\n");
+                token = strtok_r(NULL, "\n", &saveptr);
                 index++;
             }
         }
-
-
 
         printf("\r");
 
         // Clear the entire line
         printf("\033[K");
-//        for (int i = 0; i < MAX_CLIENTS; i++) {
-//            printf("client %d: %s\n", i+1, data->message[i]);
-//        }
+        //        for (int i = 0; i < MAX_CLIENTS; i++) {
+        //            printf("client %d: %s\n", i+1, data->message[i]);
+        //        }
 
         char *finduser = strstr(message, "User");
-        if (finduser != NULL) {
+        if(finduser != NULL)
+        {
             printf("\nInput message (Ctrl+D to quit): ");
-        }else {
+        }
+        else
+        {
             printf("\t\t\t\t\t\t\t %s \nInput message (Ctrl+D to quit): ", message);
         }
         fflush(stdout);
-
     }
     return NULL;
 }
-void *handle_client(void *arg) {
-    struct ThreadArgs *args = (struct ThreadArgs *)arg;
-    int clnt_sock = *(args->clnt_sock_ptr);
-    pthread_mutex_t *mutex = args->mutex;
-    int *clnt_socks = args->clnt_socks;
-    char buf[BUF_SIZE];
-    char bufcopy[BUF_SIZE];
-    char *full_user;
-    size_t full_user_size;
-    char input_message[2048];
 
-    while (1) {
+void *handle_client(void *arg)
+{
+    struct ThreadArgs *args       = (struct ThreadArgs *)arg;
+    int                clnt_sock  = *(args->clnt_sock_ptr);
+    pthread_mutex_t   *mutex      = args->mutex;
+    int               *clnt_socks = args->clnt_socks;
+    char               buf[BUF_SIZE];
+    char               bufcopy[BUF_SIZE];
+    char               input_message[BUFF_SIZE];
+
+    while(1)
+    {
         // Initialize buf before each read
         memset(buf, 0, sizeof(buf));
 
         ssize_t str_len = read(clnt_sock, buf, sizeof(buf));
-        memcpy(bufcopy, buf, str_len);
-        if (str_len <= 0) {
+        memcpy(bufcopy, buf, (size_t)str_len);
+        if(str_len <= 0)
+        {
             break;
         }
 
         // Check if the received message is "has joined the chat."
-        if (strstr(bufcopy, "has left the chat.") != NULL) {
+        if(strstr(bufcopy, "has left the chat.") != NULL)
+        {
             // If the message indicates a new user joining, disable further messages from this client
             pthread_mutex_lock(mutex);
-            for (int i = 0; i < MAX_CLIENTS; ++i) {
-                if (clnt_socks[i] == clnt_sock) {
+            for(int i = 0; i < MAX_CLIENTS; ++i)
+            {
+                if(clnt_socks[i] == clnt_sock)
+                {
                     // Disable further messages from this client
                     clnt_socks[i] = 0;
                     break;
                 }
             }
             pthread_mutex_unlock(mutex);
-
         }
 
         // Append the value of clnt_sock to buf
@@ -556,13 +553,16 @@ void *handle_client(void *arg) {
 
         // Write the received message to all connected clients
         pthread_mutex_lock(mutex);
-        for (int i = 0; i < MAX_CLIENTS; ++i) {
-            if (clnt_socks[i] != 0 && clnt_socks[i] != clnt_sock) {
+        for(int i = 0; i < MAX_CLIENTS; ++i)
+        {
+            if(clnt_socks[i] != 0 && clnt_socks[i] != clnt_sock)
+            {
                 // Ensure null-termination
-                input_message[str_len + sizeof("current talk:")] = '\0';
+                input_message[(size_t)str_len] = '\0';
 
                 // Use send to send the null-terminated string
-                if (send(clnt_socks[i], input_message, str_len + sizeof("current talk:"), 0) == -1) {
+                if(send(clnt_socks[i], input_message, (size_t)str_len, 0) == -1)
+                {
                     perror("send");
                     // Handle the error as needed
                 }
@@ -581,47 +581,51 @@ void *handle_client(void *arg) {
 
     // Remove the disconnected client from the array
     pthread_mutex_lock(mutex);
-    for (int i = 0; i < MAX_CLIENTS; ++i) {
-        if (clnt_socks[i] == clnt_sock) {
+    for(int i = 0; i < MAX_CLIENTS; ++i)
+    {
+        if(clnt_socks[i] == clnt_sock)
+        {
             clnt_socks[i] = 0;
             break;
         }
     }
     pthread_mutex_unlock(mutex);
     // 메모리 해제
-    free(full_user);
+
     close(clnt_sock);
     return NULL;
 }
 
-void *server_input_handler(void *arg) {
-
+void *server_input_handler(void *arg)
+{
     char input_message[BUF_SIZE];
 
-    struct ThreadArgs *args = (struct ThreadArgs *)arg;
-    pthread_mutex_t *mutex = args->mutex;
-    int *clnt_socks = args->clnt_socks;
+    struct ThreadArgs *args       = (struct ThreadArgs *)arg;
+    pthread_mutex_t   *mutex      = args->mutex;
+    int               *clnt_socks = args->clnt_socks;
 
-
-    size_t full_message_size;
-    char *full_message;
-
-    while (1) {
+    while(1)
+    {
+        size_t full_message_size;
+        char  *full_message;
         // Get server input
         printf("\rInput message (Ctrl+D to quit): ");
         fflush(stdout);
-        if (fgets(input_message, BUF_SIZE, stdin) == NULL) {
+        if(fgets(input_message, BUF_SIZE, stdin) == NULL)
+        {
             perror("fgets");
             break;
         }
-        if (!strcmp(input_message, "q\n") || !strcmp(input_message, "Q\n")) {
+        if(!strcmp(input_message, "q\n") || !strcmp(input_message, "Q\n"))
+        {
             char leave_message[ADD_SIZE + 2];
             snprintf(leave_message, sizeof(leave_message), "%s has left the chat.\n", "king of room");
             // Broadcast the server input to all clients
             pthread_mutex_lock(mutex);
-            for (int i = 0; i < MAX_CLIENTS; ++i) {
-                if (clnt_socks[i] != 0) {
-
+            for(int i = 0; i < MAX_CLIENTS; ++i)
+            {
+                if(clnt_socks[i] != 0)
+                {
                     write(clnt_socks[i], leave_message, strlen(leave_message));
                 }
             }
@@ -633,21 +637,22 @@ void *server_input_handler(void *arg) {
         }
 
         full_message_size = strlen("server") + strlen(": ") + strlen(input_message) + 1;
-        full_message = (char *)malloc(full_message_size);
+        full_message      = (char *)malloc(full_message_size);
 
-        if (full_message == NULL) {
+        if(full_message == NULL)
+        {
             perror("malloc() error");
             exit(EXIT_FAILURE);
         }
 
         snprintf(full_message, full_message_size, "%s: %s", "server", input_message);
 
-
         // Broadcast the server input to all clients
         pthread_mutex_lock(mutex);
-        for (int i = 0; i < MAX_CLIENTS; ++i) {
-            if (clnt_socks[i] != 0) {
-
+        for(int i = 0; i < MAX_CLIENTS; ++i)
+        {
+            if(clnt_socks[i] != 0)
+            {
                 write(clnt_socks[i], full_message, strlen(full_message));
             }
         }
@@ -661,62 +666,70 @@ void *server_input_handler(void *arg) {
 }
 
 // --server
-void run_server(int sockfd, char *user_name) {
-    int clnt_socks[MAX_CLIENTS];
-    pthread_mutex_t mutex;
+noreturn void run_server(int sockfd)
+{
+    int               clnt_socks[MAX_CLIENTS];
+    pthread_mutex_t   mutex;
     struct ClientInfo clients[MAX_CLIENTS];
 
-    for (int i = 0; i < MAX_CLIENTS; ++i) {
+    for(int i = 0; i < MAX_CLIENTS; ++i)
+    {
         clnt_socks[i] = 0;
+        strcpy(clients[i].username, "");
     }
 
     pthread_mutex_init(&mutex, NULL);
     setup_signal_handler();
 
-    while (1) {
+    while(1)
+    {
         struct sockaddr_storage clnt_addr;
-        socklen_t clnt_addr_len = sizeof(clnt_addr);
-        int *clnt_sock_ptr = (int *)malloc(sizeof(int));
-        int userIndex = 0;
-        char test[300];
-
+        socklen_t               clnt_addr_len = sizeof(clnt_addr);
+        int                    *clnt_sock_ptr = (int *)malloc(sizeof(int));
+        int                     userIndex     = 0;
 
         *clnt_sock_ptr = accept(sockfd, (struct sockaddr *)&clnt_addr, &clnt_addr_len);
 
-        if (*clnt_sock_ptr == -1) {
+        if(*clnt_sock_ptr == -1)
+        {
             free(clnt_sock_ptr);
             continue;
         }
         // Print the value stored in *clnt_sock_ptr
 
-
         pthread_mutex_lock(&mutex);
-        for (int i = 0; i < MAX_CLIENTS; ++i) {
-            if (clnt_socks[i] == 0) {
+        for(int i = 0; i < MAX_CLIENTS; ++i)
+        {
+            if(clnt_socks[i] == 0)
+            {
                 clnt_socks[i] = *clnt_sock_ptr;
-                userIndex = i;
+                userIndex     = i;
                 break;
             }
-
         }
         pthread_mutex_unlock(&mutex);
 
-        char client_addr_str[INET6_ADDRSTRLEN];
+        char      client_addr_str[INET6_ADDRSTRLEN];
         in_port_t client_port;
-        if (inet_ntop(clnt_addr.ss_family, clnt_addr.ss_family == AF_INET ? (void *)&(((struct sockaddr_in *)&clnt_addr)->sin_addr) : (void *)&(((struct sockaddr_in6 *)&clnt_addr)->sin6_addr), client_addr_str, sizeof(client_addr_str)) == NULL) {
+        if(inet_ntop(clnt_addr.ss_family, clnt_addr.ss_family == AF_INET ? (void *)&(((struct sockaddr_in *)&clnt_addr)->sin_addr) : (void *)&(((struct sockaddr_in6 *)&clnt_addr)->sin6_addr), client_addr_str, sizeof(client_addr_str)) == NULL)
+        {
             perror("inet_ntop");
             exit(EXIT_FAILURE);
         }
 
-        if (clnt_addr.ss_family == AF_INET) {
+        if(clnt_addr.ss_family == AF_INET)
+        {
             client_port = ntohs(((struct sockaddr_in *)&clnt_addr)->sin_port);
-        } else if (clnt_addr.ss_family == AF_INET6) {
+        }
+        else if(clnt_addr.ss_family == AF_INET6)
+        {
             client_port = ntohs(((struct sockaddr_in6 *)&clnt_addr)->sin6_port);
-        } else {
+        }
+        else
+        {
             fprintf(stderr, "Invalid address family: %d\n", clnt_addr.ss_family);
             exit(EXIT_FAILURE);
         }
-
 
         printf("\r");
         // Clear the entire line
@@ -725,30 +738,26 @@ void run_server(int sockfd, char *user_name) {
 
         printf("Client socket value: %d\n", *clnt_sock_ptr);
 
-
-
-
         // 클라이언트 정보 구조체에 저장
 
         snprintf(clients[userIndex].username, sizeof(clients[userIndex].username), "User%d", *clnt_sock_ptr);
-        inet_ntop(clnt_addr.ss_family, (clnt_addr.ss_family == AF_INET) ? (void *)&(((struct sockaddr_in *)&clnt_addr)->sin_addr) : (void *)&(((struct sockaddr_in6 *)&clnt_addr)->sin6_addr), clients[userIndex].ip_address, sizeof(clients[userIndex].ip_address));
+        inet_ntop(clnt_addr.ss_family,
+                  (clnt_addr.ss_family == AF_INET) ? (void *)&(((struct sockaddr_in *)&clnt_addr)->sin_addr) : (void *)&(((struct sockaddr_in6 *)&clnt_addr)->sin6_addr),
+                  clients[userIndex].ip_address,
+                  sizeof(clients[userIndex].ip_address));
         clients[userIndex].port = ntohs((clnt_addr.ss_family == AF_INET) ? ((struct sockaddr_in *)&clnt_addr)->sin_port : ((struct sockaddr_in6 *)&clnt_addr)->sin6_port);
 
-
-
         // 클라이언트에게 정보 전송
-        send_socket_info_all(clients, clnt_socks, &mutex, userIndex);
-
-
-
+        send_socket_info_all(clients, clnt_socks, &mutex);
 
         struct ThreadArgs *thread_args = (struct ThreadArgs *)malloc(sizeof(struct ThreadArgs));
-        thread_args->clnt_sock_ptr = clnt_sock_ptr;
-        thread_args->mutex = &mutex;
-        thread_args->clnt_socks = clnt_socks;
+        thread_args->clnt_sock_ptr     = clnt_sock_ptr;
+        thread_args->mutex             = &mutex;
+        thread_args->clnt_socks        = clnt_socks;
 
         pthread_t server_input_thread;
-        if (pthread_create(&server_input_thread, NULL, server_input_handler, (void *)thread_args) != 0) {
+        if(pthread_create(&server_input_thread, NULL, server_input_handler, (void *)thread_args) != 0)
+        {
             perror("Thread creation failed");
             close(*clnt_sock_ptr);
             free(clnt_sock_ptr);
@@ -757,7 +766,8 @@ void run_server(int sockfd, char *user_name) {
         }
 
         pthread_t thread;
-        if (pthread_create(&thread, NULL, handle_client, (void *)thread_args) != 0) {
+        if(pthread_create(&thread, NULL, handle_client, (void *)thread_args) != 0)
+        {
             perror("Thread creation failed");
             close(*clnt_sock_ptr);
             free(clnt_sock_ptr);
@@ -768,43 +778,44 @@ void run_server(int sockfd, char *user_name) {
         pthread_detach(thread);
     }
 }
-void send_socket_info_all(struct ClientInfo *clients, int *clnt_socks, pthread_mutex_t *mutex, int current_client_index) {
-    char socket_str[1024];
 
-
+void send_socket_info_all(struct ClientInfo *clients, int *clnt_socks, pthread_mutex_t *mutex)
+{
+    char socket_str[SOCKET_STR_SIZE];
 
     pthread_mutex_lock(mutex);
     // Iterate through all connected clients
-    for (int i = 0; i < MAX_CLIENTS; ++i) {
-        if (clnt_socks[i] != 0) {
+    for(int i = 0; i < MAX_CLIENTS; ++i)
+    {
+        if(clnt_socks[i] != 0)
+        {
             // Initialize the string with an empty message
             socket_str[0] = '\0';
 
-
             // Iterate again to append information about all clients
-            for (int j = 0; j < MAX_CLIENTS; ++j) {
-                if (clnt_socks[j] != 0) {
+            for(int j = 0; j < MAX_CLIENTS; ++j)
+            {
+                if(clnt_socks[j] != 0)
+                {
                     // Append client information to the string
-                    snprintf(socket_str + strlen(socket_str), sizeof(socket_str) - strlen(socket_str),
-                             "[%s]%s:%u\n", clients[j].username, clients[j].ip_address, clients[j].port);
-
+                    snprintf(socket_str + strlen(socket_str), sizeof(socket_str) - strlen(socket_str), "[%s]%s:%u\n", clients[j].username, clients[j].ip_address, clients[j].port);
                 }
             }
 
             // Send the information to the client
             send(clnt_socks[i], socket_str, strlen(socket_str), 0);
 
-
-
             fflush(stdout);
         }
     }
     pthread_mutex_unlock(mutex);
     pthread_mutex_lock(mutex);
-    for (int i = 0; i < MAX_CLIENTS; ++i) {
+    for(int i = 0; i < MAX_CLIENTS; ++i)
+    {
         // Convert port number to string and send it separately
-        if (clnt_socks[i] != 0) {
-            char port_str[100];
+        if(clnt_socks[i] != 0)
+        {
+            char port_str[PORT_STR_SIZE];
             snprintf(port_str, sizeof(port_str), "%u", clients[i].port);
             send(clnt_socks[i], port_str, strlen(port_str), 0);
         }
@@ -813,272 +824,280 @@ void send_socket_info_all(struct ClientInfo *clients, int *clnt_socks, pthread_m
 }
 
 //---client
-void run_client(int sockfd, char *user_name, const char *file_name, int client_PORT, int server_fd){
+noreturn void run_client(int sockfd, char *user_name, const char *file_name, int client_PORT, int server_fd)
+{
     pthread_t thread;
-    pthread_t keyPress;
-    char message[BUF_SIZE];
-    char connection_message[ADD_SIZE + 2];
+    char      message[BUF_SIZE];
+    char      connection_message[ADD_SIZE + 2];
+    long int  PORT_server;
 
-    struct PortData portData;  // Assuming you have an instance of PortData
+    struct PortData         portData;    // Assuming you have an instance of PortData
     struct ClientThreadArgs clientThreadArgs = {sockfd, &portData};
 
-
-
-    if (file_name != NULL) {
+    if(file_name != NULL)
+    {
         // Set a default username for the file reading version
         snprintf(user_name, BUF_SIZE, "FileUser");
 
-        FILE *file = fopen(file_name, "r");
-        if (file == NULL) {
+        FILE *file = fopen(file_name, "re");
+        if(file == NULL)
+        {
             perror("Error opening file");
             exit(EXIT_FAILURE);
         }
 
-        while (fgets(message, sizeof(message), file) != NULL) {
+        while(fgets(message, sizeof(message), file) != NULL)
+        {
             // Send each line from the file as a separate message
             write(sockfd, message, strlen(message));
 
-            sleep(1);  // Adjust sleep duration if needed
+            sleep(1);    // Adjust sleep duration if needed
         }
 
         fclose(file);
+    }
 
-    } else {
+    snprintf(connection_message, sizeof(connection_message), "%s[%d] has joined the chat.\n", user_name, client_PORT);
+    write(sockfd, connection_message, strlen(connection_message));
 
+    if(pthread_create(&thread, NULL, receive_messages, (void *)&clientThreadArgs) != 0)
+    {
+        perror("Thread creation failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
 
+    while(1)
+    {
+        size_t full_message_size;
+        char  *full_message;
+        char   leave_message[ADD_SIZE + 2];
+        char  *endptr;
 
-        snprintf(connection_message, sizeof(connection_message), "%s[%d] has joined the chat.\n", user_name,client_PORT);
-        write(sockfd, connection_message, strlen(connection_message));
+        // Read input from the user
+        fputs("Input message (Ctrl+D to quit): ", stdout);
 
-        if (pthread_create(&thread, NULL, receive_messages, (void *)&clientThreadArgs) != 0) {
-            perror("Thread creation failed");
+        if(fgets(message, BUF_SIZE, stdin) == NULL)
+        {
+            // Ctrl+D detected
+            printf("\nCtrl+D detected. Exiting...\n");
+            snprintf(leave_message, sizeof(leave_message), "%s[%d] has left the chat.\n", user_name, client_PORT);
+            printf("Client information:\n");
+            for(int i = 0; i < MAX_CLIENTS; ++i)
+            {
+                printf("Client %d: %s\n", i + 1, portData.message[i]);
+            }
+            write(sockfd, leave_message, strlen(leave_message));
             close(sockfd);
-            exit(EXIT_FAILURE);
+            exit(0);
+
+            // Additional cleanup and exit logic goes here
+            break;
         }
 
-
-
-        while (1) {
-            size_t full_message_size;
-            char *full_message;
-            char leave_message[ADD_SIZE + 2];
-
-
-
-            // Read input from the user
-            fputs("Input message (Ctrl+D to quit): ", stdout);
-
-            if (fgets(message, BUF_SIZE, stdin) == NULL) {
-                // Ctrl+D detected
-                printf("\nCtrl+D detected. Exiting...\n");
-                snprintf(leave_message, sizeof(leave_message), "%s[%d] has left the chat.\n", user_name, client_PORT);
-                printf("Client information:\n");
-                for (int i = 0; i < MAX_CLIENTS; ++i) {
-                    printf("Client %d: %s\n", i + 1, portData.message[i]);
-                }
-                write(sockfd, leave_message, strlen(leave_message));
-                close(sockfd);
-                exit(0);
-
-                // Additional cleanup and exit logic goes here
-                break;
+        //---------------------------------------------------------------------------
+        if(!strcmp(message, "q\n") || !strcmp(message, "Q\n"))
+        {
+            snprintf(leave_message, sizeof(leave_message), "%s[%d] has left the chat.\n", user_name, client_PORT);
+            printf("Client information:\n");
+            for(int i = 0; i < MAX_CLIENTS; ++i)
+            {
+                printf("Client %d: %s\n", i + 1, portData.message[i]);
             }
-
-
-            //---------------------------------------------------------------------------
-            if (!strcmp(message, "q\n") || !strcmp(message, "Q\n")) {
-
-                snprintf(leave_message, sizeof(leave_message), "%s[%d] has left the chat.\n", user_name, client_PORT);
-                printf("Client information:\n");
-                for (int i = 0; i < MAX_CLIENTS; ++i) {
-                    printf("Client %d: %s\n", i + 1, portData.message[i]);
-                }
-                write(sockfd, leave_message, strlen(leave_message));
-                close(sockfd);
-                exit(0);
+            write(sockfd, leave_message, strlen(leave_message));
+            close(sockfd);
+            exit(0);
+        }
+        if(!strcmp(message, "h\n") || !strcmp(message, "H\n"))
+        {
+            for(int i = 0; i < MAX_CLIENTS; ++i)
+            {
+                printf("Client %d: %s\n", i + 1, portData.message[i]);
             }
-            if (!strcmp(message, "h\n") || !strcmp(message, "H\n")) {
+            continue;
+        }
 
+        if(!strcmp(message, "z\n") || !strcmp(message, "Z\n"))
+        {
+            char port_str[PORT_STR_SIZE];
+            snprintf(leave_message, sizeof(leave_message), "%s[%d] has left the chat.\n", user_name, client_PORT);
 
-                for (int i = 0; i < MAX_CLIENTS; ++i) {
-                    printf("Client %d: %s\n", i + 1, portData.message[i]);
-                }
-                continue;
-            }
+            write(sockfd, leave_message, strlen(leave_message));
 
-            if (!strcmp(message, "z\n") || !strcmp(message, "Z\n")) {
+            close(sockfd);
 
-                snprintf(leave_message, sizeof(leave_message), "%s[%d] has left the chat.\n", user_name, client_PORT);
+            // Printed the server socket addr and port
+            // printf("IP address is: %s\n", inet_ntoa(address.sin_addr));
+            printf("port is: %d\n", client_PORT);
 
-                write(sockfd, leave_message, strlen(leave_message));
-
-                close(sockfd);
-
-                //Printed the server socket addr and port
-                //printf("IP address is: %s\n", inet_ntoa(address.sin_addr));
-                printf("port is: %u\n", client_PORT);
-
-                if (listen(server_fd, 5) < 0) {
-                    perror("listen");
-                    exit(EXIT_FAILURE);
-                }
-
-                pthread_t tid;
-                pthread_create(&tid, NULL, &p2preceive_thread,
-                               &server_fd); //Creating thread to keep receiving message in real time
-
-                while(1){
-
-                    p2psend(user_name, client_PORT);
-
-                }
-
-
-                close(server_fd);
-
-
-            }
-
-            full_message_size = strlen(user_name) + strlen("[]")+ sizeof(client_PORT) + strlen(": ") + strlen(message) + 1;
-            full_message = (char *) malloc(full_message_size);
-
-            if (full_message == NULL) {
-                perror("malloc() error");
+            if(listen(server_fd, LISTEN_BACKLOG) < 0)
+            {
+                perror("listen");
                 exit(EXIT_FAILURE);
             }
 
+            pthread_t tid;
+            pthread_create(&tid, NULL, &p2preceive_thread,
+                           &server_fd);    // Creating thread to keep receiving message in real time
 
-            snprintf(full_message, full_message_size, "%s[%d]: %s", user_name,client_PORT, message);
-            write(sockfd, full_message, strlen(full_message));
+            printf("Enter the port to send message:");    // Considering each peer will enter different port
+            scanf("%99s", port_str);
+            PORT_server = strtol(port_str, &endptr, BASE_TEN);
 
+            while(1)
+            {
+                p2psend(user_name, client_PORT, PORT_server, portData);
+            }
 
-            // Print the original prompt after broadcasting the server input
-
-
-
-            free(full_message);
-
+            close(server_fd);
         }
+
+        full_message_size = strlen(user_name) + strlen("[]") + sizeof(client_PORT) + strlen(": ") + strlen(message) + 1;
+        full_message      = (char *)malloc(full_message_size);
+
+        if(full_message == NULL)
+        {
+            perror("malloc() error");
+            exit(EXIT_FAILURE);
+        }
+
+        snprintf(full_message, full_message_size, "%s[%d]: %s", user_name, client_PORT, message);
+        write(sockfd, full_message, strlen(full_message));
+
+        // Print the original prompt after broadcasting the server input
+
+        free(full_message);
     }
 
     pthread_join(thread, NULL);
-
 }
-//Sending messages to port
-void p2psend(char *name,  int PORT)
+
+// Sending messages to port
+void p2psend(char *name, int PORT, long int PORT_server, struct PortData portData)
 {
+    char message[BUF_SIZE] = {0};
 
-    char message[2048] = {0};
     memset(message, 0, sizeof(message));
-    //Fetching port number
-    int PORT_server;
+    // Fetching port number
 
-    //IN PEER WE TRUST
+    // IN PEER WE TRUST
+    if(!strcmp(message, "c\n") || !strcmp(message, "C\n"))
+    {
+        char input_str[SCANF_ARRAY];
+        printf("Enter the port to send message:");    // Considering each peer will enter different port
+        scanf("%19s", input_str);
+        PORT_server = strtol(input_str, NULL, BASE_TEN);
+    }
 
-    printf("Enter the port to send message:"); //Considering each peer will enter different port
-    scanf("%d", &PORT_server);
-
-    int sock = 0, valread;
+    int                sock = 0;
     struct sockaddr_in serv_addr;
 
-    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+    if((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
     {
         printf("\n Socket creation error \n");
-        return;
+        exit(1);
     }
 
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_addr.s_addr = INADDR_ANY; //INADDR_ANY always gives an IP of 0.0.0.0
-    serv_addr.sin_port = htons(PORT_server);
+    serv_addr.sin_family      = AF_INET;
+    serv_addr.sin_addr.s_addr = INADDR_ANY;    // INADDR_ANY always gives an IP of 0.0.0.0
+    serv_addr.sin_port        = htons((uint16_t)PORT_server);
 
-    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
+    if(connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
     {
         printf("\nConnection Failed \n");
-        return;
+        exit(1);
     }
 
-
     size_t full_message_size;
-    char *full_message;
+    char  *full_message;
 
     printf("\r");
 
     // Clear the entire line
     printf("\033[K");
-    printf("Input message (Ctrl+D to quit): ");
-    fgets(message, BUF_SIZE, stdin);
+    printf("Input message (Q to quit): ");
+    if(fgets(message, BUF_SIZE, stdin) == NULL)
+    {
+        // Ctrl+D detected
+        printf("\nCtrl+D detected. Exiting...\n");
 
-// Calculate the actual length of the port number when converting it to a string
-    int port_length = snprintf(NULL, 0, "%d", PORT);
-    full_message_size = strlen(name) + strlen("[PORT:") + port_length + strlen("] says: ") + strlen(message) + 1;
+        printf("Client information:\n");
+        for(int i = 0; i < MAX_CLIENTS; ++i)
+        {
+            printf("Client %d: %s\n", i + 1, portData.message[i]);
+        }
+
+        close(sock);
+        exit(0);
+    }
+
+    // Calculate the actual length of the port number when converting it to a string
+    int port_length   = snprintf(NULL, 0, "%d", PORT);
+    full_message_size = (size_t)strlen(name) + (size_t)strlen("[PORT:") + (size_t)port_length + strlen("]: ") + (size_t)strlen(message) + 1;
 
     full_message = (char *)malloc(full_message_size);
 
-    if (full_message == NULL) {
+    if(full_message == NULL)
+    {
         perror("malloc() error");
         exit(EXIT_FAILURE);
     }
 
     // Use sprintf instead of snprintf to directly write into the allocated buffer
-    sprintf(full_message, "%s[PORT:%d] says: %s", name, PORT, message);
-
+    sprintf(full_message, "%s[PORT:%d]: %s", name, PORT, message);
 
     // Use strlen(full_message) to get the actual length of the string
     send(sock, full_message, strlen(full_message), 0);
 
     close(sock);
-    free(full_message);  // Don't forget to free the allocated memory
-
-
+    free(full_message);    // Don't forget to free the allocated memory
 }
-//Calling receiving every 2 seconds
-void *p2preceive_thread(void *server_fd)
+
+// Calling receiving every 2 seconds
+noreturn void *p2preceive_thread(void *server_fd)
 {
     int s_fd = *((int *)server_fd);
-    while (1)
+    while(1)
     {
         sleep(2);
         p2preceivemsg(s_fd);
     }
 }
 
-//Receiving messages on our port
+// Receiving messages on our port
 void p2preceivemsg(int server_fd)
 {
     struct sockaddr_in address;
-    int valread;
-    char buffer[2000] = {0};
+    char               buffer[BUF_SIZE] = {0};
 
+    int    addrlen = sizeof(address);
+    fd_set current_sockets;
+    fd_set ready_sockets;
 
-    int addrlen = sizeof(address);
-    fd_set current_sockets, ready_sockets;
-
-    //Initialize my current set
+    // Initialize my current set
     FD_ZERO(&current_sockets);
     FD_SET(server_fd, &current_sockets);
     int k = 0;
-    while (1)
+    while(1)
     {
         k++;
         ready_sockets = current_sockets;
 
-        if (select(FD_SETSIZE, &ready_sockets, NULL, NULL, NULL) < 0)
+        if(select(FD_SETSIZE, &ready_sockets, NULL, NULL, NULL) < 0)
         {
             perror("Error");
             exit(EXIT_FAILURE);
         }
 
-        for (int i = 0; i < FD_SETSIZE; i++)
+        for(int i = 0; i < FD_SETSIZE; i++)
         {
-            if (FD_ISSET(i, &ready_sockets))
+            if(FD_ISSET(i, &ready_sockets))
             {
-
-                if (i == server_fd)
+                if(i == server_fd)
                 {
                     int client_socket;
 
-                    if ((client_socket = accept(server_fd, (struct sockaddr *)&address,
-                                                (socklen_t *)&addrlen)) < 0)
+                    if((client_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t *)&addrlen)) < 0)
                     {
                         perror("accept");
                         exit(EXIT_FAILURE);
@@ -1088,18 +1107,19 @@ void p2preceivemsg(int server_fd)
                 else
                 {
                     memset(buffer, 0, sizeof(buffer));
-                    valread = recv(i, buffer, sizeof(buffer), 0);
+                    FD_CLR(i, &current_sockets);
                     printf("\r");
 
                     // Clear the entire line
                     printf("\033[K");
-                    printf("\t\t\t\t\t\t\t %s\nInput message (Ctrl+D to quit): :\"", buffer);
-                    FD_CLR(i, &current_sockets);
+                    printf("\t\t\t\t\t\t\t %s\nInput message (Q to quit):\"", buffer);
                 }
             }
         }
 
-        if (k == (FD_SETSIZE * 2))
+        if(k == (FD_SETSIZE * 2))
+        {
             break;
+        }
     }
 }

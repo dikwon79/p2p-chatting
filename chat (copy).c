@@ -69,8 +69,7 @@ void run_client(int sockfd, char *user_name, const char *file_name, int client_P
 void *server_input_handler(void *arg);
 void *p2preceive_thread(void *server_fd);
 void p2preceivemsg(int server_fd);
-void p2psend(char *name,  int PORT, int PORT_server, struct PortData portData);
-
+void p2psend(const char *user_name, int client_PORT, long int PORT_server, const char *portData);
 
 
 int main(int argc, char *argv[]) {
@@ -114,6 +113,7 @@ int main(int argc, char *argv[]) {
 
         int server_fd;
         struct sockaddr_in address;
+        socklen_t len;
 
         // Creating socket file descriptor
         if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
@@ -132,12 +132,15 @@ int main(int argc, char *argv[]) {
             exit(EXIT_FAILURE);
         }
 
-        // Retrieve the assigned port
-        socklen_t len = sizeof(address);
-        if (getsockname(server_fd, (struct sockaddr *) &address, &len) == -1) {
+        #pragma GCC diagnostic ignored "-Wdeclaration-after-statement"
+
+        len = sizeof(address);
+
+        if (getsockname(server_fd, (struct sockaddr *)&address, &len) == -1) {
             perror("getsockname failed");
             exit(EXIT_FAILURE);
         }
+
 
 
         client_PORT = ntohs(address.sin_port);
@@ -518,7 +521,7 @@ static void *receive_messages(void *arg)
 }
 void *handle_client(void *arg) {
     struct ThreadArgs *args = (struct ThreadArgs *)arg;
-    struct PortData *data = args->data;
+    struct ClientInfo *clientInfo = (struct ClientInfo *)arg;
     int clnt_sock = *(args->clnt_sock_ptr);
     pthread_mutex_t *mutex = args->mutex;
     int *clnt_socks = args->clnt_socks;
@@ -665,7 +668,6 @@ void run_server(int sockfd, char *user_name) {
     int clnt_socks[MAX_CLIENTS];
     pthread_mutex_t mutex;
     struct ClientInfo clients[MAX_CLIENTS];
-    struct PortData *data;
 
     for (int i = 0; i < MAX_CLIENTS; ++i) {
         clnt_socks[i] = 0;
@@ -819,7 +821,7 @@ void run_client(int sockfd, char *user_name, const char *file_name, int client_P
     pthread_t keyPress;
     char message[BUF_SIZE];
     char connection_message[ADD_SIZE + 2];
-    int PORT_server;
+    long int PORT_server;
 
     struct PortData portData;  // Assuming you have an instance of PortData
     struct ClientThreadArgs clientThreadArgs = {sockfd, &portData};
@@ -968,7 +970,7 @@ void run_client(int sockfd, char *user_name, const char *file_name, int client_P
 
 }
 //Sending messages to port
-void p2psend(char *name,  int PORT, int PORT_server, struct PortData portData)
+void p2psend(char *name,  int PORT, long int PORT_server, struct PortData portData)
 {
 
     char message[2048] = {0};
@@ -980,7 +982,7 @@ void p2psend(char *name,  int PORT, int PORT_server, struct PortData portData)
 
 
         printf("Enter the port to send message:"); //Considering each peer will enter different port
-        scanf("%d", &PORT_server);
+        scanf("%ld", &PORT_server);
     }
 
     int sock = 0, valread;
